@@ -2,6 +2,7 @@ package app.ImageTask.service;
 
 import app.ImageTask.config.VariableConfig;
 import app.ImageTask.domain.dto.SizeDto;
+import app.ImageTask.domain.dto.VideoDto;
 import app.ImageTask.domain.entity.Video;
 import app.ImageTask.repository.VideoRepository;
 import jakarta.annotation.PostConstruct;
@@ -123,6 +124,18 @@ public class VideoService {
                     errorMap.put("error", Boolean.FALSE);
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
                 });
+    }
+
+    public Mono<ResponseEntity<VideoDto>> getVideo(String id) {
+        return videoRepository.findById(id)
+                .map(video -> VideoDto.builder()
+                        .id(video.getId())
+                        .filename(video.getFilename())
+                        .processing(video.getProcessing())
+                        .processingSuccess(video.getProcessingSuccess())
+                        .build())
+                .map(videoDto -> ResponseEntity.ok(videoDto))
+                .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build()));
     }
 
     private boolean isMp4File(FilePart file) {

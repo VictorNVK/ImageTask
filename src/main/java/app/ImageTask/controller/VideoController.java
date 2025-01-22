@@ -34,7 +34,7 @@ public class VideoController {
 
     @GetMapping("/{id}")
     public Mono<ResponseEntity<VideoDto>> getVideo(@PathVariable String id) {
-        return null;
+        return videoService.getVideo(id);
     }
 
     @DeleteMapping("/{id}")

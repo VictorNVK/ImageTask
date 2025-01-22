@@ -1,15 +1,17 @@
 package app.ImageTask.domain.dto;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.*;
 
 @Getter
 @Setter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
 public class VideoDto {
 
     private String id;
     private String filename;
-    private boolean processing;
+    private Boolean processing;
     private Boolean processingSuccess;
 
 }

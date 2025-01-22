@@ -18,6 +18,6 @@ public class Video {
     private String id;
     private String filename;
     private String filePath;
-    private boolean processing;
+    private Boolean processing;
     private Boolean processingSuccess;
 }
