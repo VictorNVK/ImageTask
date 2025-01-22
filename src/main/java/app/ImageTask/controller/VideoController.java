@@ -39,7 +39,6 @@ public class VideoController {
 
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Map<String, Boolean>>> deleteVideo(@PathVariable String id) {
-        return null;
+        return videoService.deleteVideo(id);
     }
-
 }

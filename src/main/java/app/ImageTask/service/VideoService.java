@@ -8,6 +8,7 @@ import app.ImageTask.repository.VideoRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import net.bramp.ffmpeg.FFmpeg;
 import net.bramp.ffmpeg.FFmpegExecutor;
 import net.bramp.ffmpeg.FFprobe;
@@ -33,14 +34,12 @@ import static com.google.common.io.Files.getFileExtension;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class VideoService {
 
     private final VideoRepository videoRepository;
     private final VariableConfig variableConfig;
     private FFmpegExecutor executor;
-    private FFmpeg ffmpeg;
-    private FFprobe ffprobe;
-
 
     @SneakyThrows
     @PostConstruct
@@ -52,16 +51,18 @@ public class VideoService {
             throw new IllegalStateException("FFMPEG_PATH and FFPROBE_PATH environment variables must be set");
         }
 
-        ffmpeg = new FFmpeg(ffmpegPath);
-        ffprobe = new FFprobe(ffprobePath);
+        FFmpeg ffmpeg = new FFmpeg(ffmpegPath);
+        FFprobe ffprobe = new FFprobe(ffprobePath);
         executor = new FFmpegExecutor(ffmpeg, ffprobe);
-    }
 
+        log.info("ffmpeg was initialized");
+    }
 
     public Mono<ResponseEntity<Map<String, String>>> saveVideo(FilePart file) {
         return Mono.just(file)
                 .flatMap(f -> {
                     if (!isMp4File(f)) {
+                        log.error("Uploaded file, is not a MP4 format", f.filename());
                         return Mono.error(new IllegalArgumentException("Uploaded file is not an MP4 file!!"));
                     }
                     String filename = f.filename();
@@ -83,11 +84,13 @@ public class VideoService {
                             });
                 })
                 .map(video -> {
+                    log.info("Video was saved, ID : {}", video.getId());
                     Map<String, String> responseMap = new HashMap<>();
                     responseMap.put("id", video.getId());
                     return ResponseEntity.ok(responseMap);
                 })
                 .onErrorResume(e -> {
+                    log.error("Error in saving video : {}", e.getMessage());
                     Map<String, String> errorMap = new HashMap<>();
                     errorMap.put("error", e.getMessage());
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
@@ -98,9 +101,9 @@ public class VideoService {
         return videoRepository.findById(id)
                 .flatMap(video -> {
                     if (sizeDto.getWidth() % 2 != 0 || sizeDto.getHeight() % 2 != 0) {
+                        log.error("Invalid size for video, ID : {}", id);
                         return Mono.error(new IllegalArgumentException("Width and height must be even numbers greater than 20"));
                     }
-
                     video.setProcessing(true);
                     video.setProcessingSuccess(null);
 
@@ -110,9 +113,11 @@ public class VideoService {
                                     convertVideo(video.getFilePath(), sizeDto.getWidth(), sizeDto.getHeight());
                                     video.setProcessing(false);
                                     video.setProcessingSuccess(true);
+                                    log.info("Video was converted successful, ID : {}", id);
                                 } catch (IOException e) {
                                     video.setProcessing(false);
                                     video.setProcessingSuccess(false);
+                                    log.error("Error converting video ID: {}", id, e);
                                 } finally {
                                     videoRepository.save(video).subscribe();
                                 }
@@ -120,6 +125,7 @@ public class VideoService {
                             .then(Mono.just(ResponseEntity.ok(Map.of("success", true))));
                 })
                 .onErrorResume(e -> {
+                    log.error("Error in changing video size {}", e.getMessage());
                     Map<String, Boolean> errorMap = new HashMap<>();
                     errorMap.put("error", Boolean.FALSE);
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
@@ -128,14 +134,31 @@ public class VideoService {
 
     public Mono<ResponseEntity<VideoDto>> getVideo(String id) {
         return videoRepository.findById(id)
-                .map(video -> VideoDto.builder()
-                        .id(video.getId())
-                        .filename(video.getFilename())
-                        .processing(video.getProcessing())
-                        .processingSuccess(video.getProcessingSuccess())
-                        .build())
+                .map(video ->
+                        VideoDto.builder()
+                                .id(video.getId())
+                                .filename(video.getFilename())
+                                .processing(video.getProcessing())
+                                .processingSuccess(video.getProcessingSuccess())
+                                .build())
                 .map(videoDto -> ResponseEntity.ok(videoDto))
                 .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build()));
+    }
+
+    public Mono<ResponseEntity<Map<String, Boolean>>> deleteVideo(String id) {
+        return videoRepository.findById(id)
+                .flatMap(video -> {
+                    try {
+                        Files.deleteIfExists(Paths.get(video.getFilePath()));
+                        log.info("Video file deleted successfully with ID: {}", id);
+                        return videoRepository.delete(video)
+                                .then(Mono.just(ResponseEntity.ok(Map.of("success", true))));
+                    } catch (IOException e) {
+                        log.error("Error deleting video file with ID: {}", id, e);
+                        return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("success", false)));
+                    }
+                })
+                .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("success", false))));
     }
 
     private boolean isMp4File(FilePart file) {
