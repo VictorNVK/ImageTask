@@ -29,6 +29,8 @@ dependencies {
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    implementation 'org.springframework.boot:spring-boot-starter-data-mongodb-reactive'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
 
 
     // TEST
@@ -39,6 +41,9 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation "org.springframework.security:spring-security-test"
     testImplementation 'io.projectreactor:reactor-test'
+    testImplementation 'org.testcontainers:testcontainers:1.19.0'
+    testImplementation 'org.testcontainers:junit-jupiter:1.19.0'
+    testImplementation 'org.testcontainers:mongodb:1.17.6'
 
     // SWAGGER
     implementation 'org.springdoc:springdoc-openapi-starter-common:2.7.0'
@@ -48,7 +53,7 @@ dependencies {
     // LOGS
     implementation 'org.slf4j:slf4j-api:2.0.16'
 
-    // FFMPEG
+    // HELPER
     implementation 'net.bramp.ffmpeg:ffmpeg:0.8.0'
 
     //MONGO DB
