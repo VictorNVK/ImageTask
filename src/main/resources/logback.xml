@@ -5,18 +5,11 @@
         </encoder>
     </appender>
 
-    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
-        <file>logs/app.log</file>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss} %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
     <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="CONSOLE" />
     </root>
 
-    <logger name="app.ImageTask" level="ERROR" additivity="false">
-        <appender-ref ref="FILE"/>
+    <logger name="com.example" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE" />
     </logger>
 </configuration>
