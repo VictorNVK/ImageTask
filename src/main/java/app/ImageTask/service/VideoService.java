@@ -1,6 +1,7 @@
 package app.ImageTask.service;
 
 import app.ImageTask.config.VariableConfig;
+import app.ImageTask.domain.dto.SizeDto;
 import app.ImageTask.domain.entity.Video;
 import app.ImageTask.repository.VideoRepository;
 import jakarta.annotation.PostConstruct;
@@ -9,18 +10,23 @@ import lombok.SneakyThrows;
 import net.bramp.ffmpeg.FFmpeg;
 import net.bramp.ffmpeg.FFmpegExecutor;
 import net.bramp.ffmpeg.FFprobe;
-import org.springframework.data.convert.ValueConverter;
+import net.bramp.ffmpeg.builder.FFmpegBuilder;
+import net.bramp.ffmpeg.job.FFmpegJob;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.io.Files.getFileExtension;
 
@@ -38,8 +44,6 @@ public class VideoService {
     @SneakyThrows
     @PostConstruct
     public void initFFmpeg() {
-        // Use environment variables to set the path to ffmpeg and ffprobe
-
         String ffmpegPath = variableConfig.FFMPEG_PATH;
         String ffprobePath = variableConfig.FFPROBE_PATH;
 
@@ -51,7 +55,6 @@ public class VideoService {
         ffprobe = new FFprobe(ffprobePath);
         executor = new FFmpegExecutor(ffmpeg, ffprobe);
     }
-
 
 
     public Mono<ResponseEntity<Map<String, String>>> saveVideo(FilePart file) {
@@ -90,9 +93,56 @@ public class VideoService {
                 });
     }
 
+    public Mono<ResponseEntity<Map<String, Boolean>>> changeVideoSize(SizeDto sizeDto, String id) {
+        return videoRepository.findById(id)
+                .flatMap(video -> {
+                    if (sizeDto.getWidth() % 2 != 0 || sizeDto.getHeight() % 2 != 0) {
+                        return Mono.error(new IllegalArgumentException("Width and height must be even numbers greater than 20"));
+                    }
+
+                    video.setProcessing(true);
+                    video.setProcessingSuccess(null);
+
+                    return videoRepository.save(video)
+                            .then(Mono.fromFuture(CompletableFuture.runAsync(() -> {
+                                try {
+                                    convertVideo(video.getFilePath(), sizeDto.getWidth(), sizeDto.getHeight());
+                                    video.setProcessing(false);
+                                    video.setProcessingSuccess(true);
+                                } catch (IOException e) {
+                                    video.setProcessing(false);
+                                    video.setProcessingSuccess(false);
+                                } finally {
+                                    videoRepository.save(video).subscribe();
+                                }
+                            })))
+                            .then(Mono.just(ResponseEntity.ok(Map.of("success", true))));
+                })
+                .onErrorResume(e -> {
+                    Map<String, Boolean> errorMap = new HashMap<>();
+                    errorMap.put("error", Boolean.FALSE);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
+                });
+    }
+
     private boolean isMp4File(FilePart file) {
         String contentType = file.headers().getContentType().toString();
         String fileExtension = getFileExtension(file.filename());
         return "video/mp4".equalsIgnoreCase(contentType) && "mp4".equalsIgnoreCase(fileExtension);
+    }
+
+    @SneakyThrows
+    private void convertVideo(String filePath, int width, int height) throws IOException {
+        Path tempOutputPath = Paths.get(filePath.replace(".mp4", "_temp.mp4"));
+
+        FFmpegBuilder builder = new FFmpegBuilder()
+                .setInput(filePath)
+                .addOutput(tempOutputPath.toString())
+                .setVideoResolution(width, height)
+                .done();
+
+        FFmpegJob job = executor.createJob(builder);
+        job.run();
+        Files.move(tempOutputPath, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
     }
 }

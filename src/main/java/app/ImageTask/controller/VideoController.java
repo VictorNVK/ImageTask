@@ -29,7 +29,7 @@ public class VideoController {
     @PatchMapping("/{id}")
     public Mono<ResponseEntity<Map<String, Boolean>>> changeVideSize(@Valid @RequestBody SizeDto sizeDto,
                                                                      @PathVariable String id) {
-        return null;
+        return videoService.changeVideoSize(sizeDto, id);
     }
 
     @GetMapping("/{id}")
