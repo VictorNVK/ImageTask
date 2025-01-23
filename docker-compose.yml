@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mongo:
     image: mongo:latest
@@ -11,6 +9,25 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: password
     volumes:
       - mongo-data:/data/db
+
+  app:
+    build: .
+    container_name: app
+    ports:
+      - "9099:9099"
+    environment:
+      SPRING_APPLICATION_NAME: ImageTask
+      SERVER_PORT: 9099
+      SPRING_DATA_MONGODB_HOST: mongo
+      SPRING_DATA_MONGODB_PORT: 27017
+      SPRING_DATA_MONGODB_DATABASE: videoDB
+      SPRING_DATA_MONGODB_USERNAME: mongodb
+      SPRING_DATA_MONGODB_PASSWORD: password
+      SPRING_DATA_MONGODB_AUTHENTICATION_DATABASE: admin
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      FFPROBE_PATH: /usr/bin/ffprobe
+    depends_on:
+      - mongo
 
 volumes:
   mongo-data:

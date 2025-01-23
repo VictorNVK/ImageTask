@@ -14,7 +14,12 @@ import net.bramp.ffmpeg.FFmpegExecutor;
 import net.bramp.ffmpeg.FFprobe;
 import net.bramp.ffmpeg.builder.FFmpegBuilder;
 import net.bramp.ffmpeg.job.FFmpegJob;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferFactory;
+import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
@@ -68,6 +73,12 @@ public class VideoService {
                     String filename = f.filename();
                     String id = UUID.randomUUID().toString();
                     Path filePath = Paths.get("videos", id + ".mp4");
+                    try {
+                        Files.createDirectories(filePath.getParent());
+                    } catch (Exception e) {
+                        log.error("Error creating directories: {}", e.getMessage());
+                        return Mono.error(new RuntimeException("Error creating directories: " + e.getMessage()));
+                    }
 
                     return f.transferTo(filePath)
                             .then(Mono.just(filePath))
@@ -159,6 +170,29 @@ public class VideoService {
                     }
                 })
                 .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("success", false))));
+    }
+
+    public Mono<ResponseEntity<?>> downloadVideo(String id) {
+        return videoRepository.findById(id)
+                .flatMap(video -> {
+                    Path filePath = Paths.get(video.getFilePath());
+                    if (Files.exists(filePath)) {
+                        DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
+                        try {
+                            DataBuffer dataBuffer = dataBufferFactory.wrap(Files.readAllBytes(filePath));
+                            return Mono.just(ResponseEntity.ok()
+                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + video.getFilename() + "\"")
+                                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                                    .body(dataBuffer));
+                        } catch (IOException e) {
+                            log.error("Error reading file: {}", e.getMessage());
+                            return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
+                        }
+                    } else {
+                        return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+                    }
+                })
+                .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build()));
     }
 
     private boolean isMp4File(FilePart file) {

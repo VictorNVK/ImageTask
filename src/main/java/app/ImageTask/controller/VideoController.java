@@ -41,4 +41,8 @@ public class VideoController {
     public Mono<ResponseEntity<Map<String, Boolean>>> deleteVideo(@PathVariable String id) {
         return videoService.deleteVideo(id);
     }
+    @GetMapping("/download/{id}")
+    public Mono<ResponseEntity<?>> downloadVideo(@PathVariable String id) {
+        return videoService.downloadVideo(id);
+    }
 }
