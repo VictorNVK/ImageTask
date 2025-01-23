@@ -15,6 +15,7 @@ public abstract class AbstractMongoTest {
     @Autowired
     protected ReactiveMongoTemplate reactiveMongoTemplate;
 
+
     @Container
     protected static final MongoDBContainer MONGO_DB_CONTAINER = new MongoDBContainer("mongo:4.4.2")
             .withExposedPorts(27017)
