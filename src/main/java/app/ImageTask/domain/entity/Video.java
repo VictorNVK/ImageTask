@@ -15,6 +15,7 @@ public class Video {
     @Id
     private String id;
     private String filename;
+    private String format;
     private String filePath;
     private Boolean processing;
     private Boolean processingSuccess;

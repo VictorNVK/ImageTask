@@ -5,6 +5,7 @@ import app.ImageTask.domain.dto.SizeDto;
 import app.ImageTask.domain.dto.VideoDto;
 import app.ImageTask.domain.entity.Video;
 import app.ImageTask.repository.VideoRepository;
+import app.ImageTask.util.FmmpegUtil;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -12,8 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.bramp.ffmpeg.FFmpeg;
 import net.bramp.ffmpeg.FFmpegExecutor;
 import net.bramp.ffmpeg.FFprobe;
-import net.bramp.ffmpeg.builder.FFmpegBuilder;
-import net.bramp.ffmpeg.job.FFmpegJob;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
@@ -24,18 +23,15 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-
-import static com.google.common.io.Files.getFileExtension;
 
 @Service
 @RequiredArgsConstructor
@@ -44,7 +40,9 @@ public class VideoService {
 
     private final VideoRepository videoRepository;
     private final VariableConfig variableConfig;
+    private final FmmpegUtil ffmpegUtil;
     private FFmpegExecutor executor;
+
 
     @SneakyThrows
     @PostConstruct
@@ -66,11 +64,12 @@ public class VideoService {
     public Mono<ResponseEntity<Map<String, String>>> saveVideo(FilePart file) {
         return Mono.just(file)
                 .flatMap(f -> {
-                    if (!isMp4File(f)) {
+                    if (!ffmpegUtil.isMp4File(f)) {
                         log.error("Uploaded file, is not a MP4 format", f.filename());
                         return Mono.error(new IllegalArgumentException("Uploaded file is not an MP4 file!!"));
                     }
-                    String filename = f.filename();
+                    String filename = ffmpegUtil.getNameWithoutExtension(f.filename());
+                    String format = ffmpegUtil.getFileFormat(f.filename());
                     String id = UUID.randomUUID().toString();
                     Path filePath = Paths.get("videos", id + ".mp4");
                     try {
@@ -86,6 +85,7 @@ public class VideoService {
                                 Video video = Video.builder()
                                         .id(id)
                                         .filename(filename)
+                                        .format(format)
                                         .filePath(path.toString())
                                         .processing(false)
                                         .processingSuccess(null)
@@ -108,40 +108,6 @@ public class VideoService {
                 });
     }
 
-    public Mono<ResponseEntity<Map<String, Boolean>>> changeVideoSize(SizeDto sizeDto, String id) {
-        return videoRepository.findById(id)
-                .flatMap(video -> {
-                    if (sizeDto.getWidth() % 2 != 0 || sizeDto.getHeight() % 2 != 0) {
-                        log.error("Invalid size for video, ID : {}", id);
-                        return Mono.error(new IllegalArgumentException("Width and height must be even numbers greater than 20"));
-                    }
-                    video.setProcessing(true);
-                    video.setProcessingSuccess(null);
-
-                    return videoRepository.save(video)
-                            .then(Mono.fromFuture(CompletableFuture.runAsync(() -> {
-                                try {
-                                    convertVideo(video.getFilePath(), sizeDto.getWidth(), sizeDto.getHeight());
-                                    video.setProcessing(false);
-                                    video.setProcessingSuccess(true);
-                                    log.info("Video was converted successful, ID : {}", id);
-                                } catch (IOException e) {
-                                    video.setProcessing(false);
-                                    video.setProcessingSuccess(false);
-                                    log.error("Error converting video ID: {}", id, e);
-                                } finally {
-                                    videoRepository.save(video).subscribe();
-                                }
-                            })))
-                            .then(Mono.just(ResponseEntity.ok(Map.of("success", true))));
-                })
-                .onErrorResume(e -> {
-                    log.error("Error in changing video size {}", e.getMessage());
-                    Map<String, Boolean> errorMap = new HashMap<>();
-                    errorMap.put("error", Boolean.FALSE);
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
-                });
-    }
 
     public Mono<ResponseEntity<VideoDto>> getVideo(String id) {
         return videoRepository.findById(id)
@@ -152,7 +118,7 @@ public class VideoService {
                                 .processing(video.getProcessing())
                                 .processingSuccess(video.getProcessingSuccess())
                                 .build())
-                .map(videoDto -> ResponseEntity.ok(videoDto))
+                .map(ResponseEntity::ok)
                 .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build()));
     }
 
@@ -181,7 +147,7 @@ public class VideoService {
                         try {
                             DataBuffer dataBuffer = dataBufferFactory.wrap(Files.readAllBytes(filePath));
                             return Mono.just(ResponseEntity.ok()
-                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + video.getFilename() + "\"")
+                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + video.getFilename() + video.getFormat() + "\"")
                                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                                     .body(dataBuffer));
                         } catch (IOException e) {
@@ -195,24 +161,85 @@ public class VideoService {
                 .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build()));
     }
 
-    private boolean isMp4File(FilePart file) {
-        String contentType = file.headers().getContentType().toString();
-        String fileExtension = getFileExtension(file.filename());
-        return "video/mp4".equalsIgnoreCase(contentType) && "mp4".equalsIgnoreCase(fileExtension);
+
+    public Mono<ResponseEntity<Map<String, Boolean>>> changeVideoSize(SizeDto sizeDto, String id) {
+        return videoRepository.findById(id)
+                .flatMap(video -> {
+                    if (sizeDto.getWidth() % 2 != 0 || sizeDto.getHeight() % 2 != 0) {
+                        log.error("Invalid size for video, ID : {}", id);
+                        return Mono.error(new IllegalArgumentException("Width and height must be even numbers greater than 20"));
+                    }
+                    video.setProcessing(true);
+                    video.setProcessingSuccess(null);
+
+                    return videoRepository.save(video)
+                            .then(ffmpegUtil.convertVideo(video.getFilePath(), sizeDto.getWidth(), sizeDto.getHeight(), executor))
+                            .then(Mono.fromRunnable(() -> {
+                                video.setProcessing(false);
+                                video.setProcessingSuccess(true);
+                                videoRepository.save(video).subscribe();
+                            }))
+                            .thenReturn(ResponseEntity.ok(Map.of("success", true)))
+                            .onErrorResume(e -> {
+                                log.error("Conversion failed, ID: {}", id, e);
+                                return handleConversionError(id);
+                            });
+                })
+                .onErrorResume(e -> {
+                    log.error("Global error in conversion: {}", e.getMessage());
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(Map.of("error", false)));
+                });
     }
 
-    @SneakyThrows
-    private void convertVideo(String filePath, int width, int height) throws IOException {
-        Path tempOutputPath = Paths.get(filePath.replace(".mp4", "_temp.mp4"));
+    public Mono<ResponseEntity<Map<String, Boolean>>> toGif(String id) {
+        return videoRepository.findById(id)
+                .flatMap(video -> {
+                    video.setProcessing(true);
+                    video.setProcessingSuccess(null);
 
-        FFmpegBuilder builder = new FFmpegBuilder()
-                .setInput(filePath)
-                .addOutput(tempOutputPath.toString())
-                .setVideoResolution(width, height)
-                .done();
+                    return videoRepository.save(video)
+                            .then(Mono.fromCallable(() -> {
+                                ffmpegUtil.convertVideoToGif(video.getFilePath(), executor);
+                                return video;
+                            }))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .flatMap(processedVideo -> {
+                                processedVideo.setProcessing(false);
+                                processedVideo.setProcessingSuccess(true);
+                                processedVideo.setFormat(".gif");
+                                log.info("Video converted successfully, ID: {}", id);
+                                return videoRepository.save(processedVideo);
+                            })
+                            .thenReturn(ResponseEntity.ok(Map.of("success", true)))
+                            .onErrorResume(e -> {
+                                log.error("Conversion failed, ID: {}", id, e);
+                                return videoRepository.findById(id)
+                                        .flatMap(errorVideo -> {
+                                            errorVideo.setProcessing(false);
+                                            errorVideo.setProcessingSuccess(false);
+                                            return videoRepository.save(errorVideo);
+                                        })
+                                        .thenReturn(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                                                .body(Map.of("error", false)));
+                            });
+                })
+                .onErrorResume(e -> {
+                    // Глобальная обработка ошибок
+                    log.error("Global error in conversion: {}", e.getMessage());
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(Map.of("error", false)));
+                });
+    }
 
-        FFmpegJob job = executor.createJob(builder);
-        job.run();
-        Files.move(tempOutputPath, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
+    private Mono<ResponseEntity<Map<String, Boolean>>> handleConversionError(String id) {
+        return videoRepository.findById(id)
+                .flatMap(errorVideo -> {
+                    errorVideo.setProcessing(false);
+                    errorVideo.setProcessingSuccess(false);
+                    return videoRepository.save(errorVideo);
+                })
+                .thenReturn(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(Map.of("error", false)));
     }
 }

@@ -59,6 +59,8 @@ dependencies {
     //MONGO DB
     implementation 'org.springframework.boot:spring-boot-starter-data-mongodb-reactive'
 
+    implementation 'io.github.cdimascio:java-dotenv:4.1.0'
+
 
 }
 

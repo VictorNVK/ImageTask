@@ -45,4 +45,9 @@ public class VideoController {
     public Mono<ResponseEntity<?>> downloadVideo(@PathVariable String id) {
         return videoService.downloadVideo(id);
     }
+
+    @PatchMapping("/toGif/{id}")
+    public Mono<ResponseEntity<Map<String, Boolean>>> toGif(@PathVariable String id){
+        return videoService.toGif(id);
+    }
 }
