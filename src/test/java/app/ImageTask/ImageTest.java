@@ -75,6 +75,22 @@ public class ImageTest extends AbstractMongoTest {
 
     @Test
     @Order(2)
+    void correctConvertToGif(){
+        String id = uuid;
+
+        Mono<ResponseEntity<Map<String, Boolean>>> responseMono = videoService.toGif(id);
+
+        StepVerifier.create(responseMono)
+                .assertNext(response -> {
+                    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+                    assertThat(response.getBody().containsKey("success"));
+                    assertThat(response.getBody().get("success")).isEqualTo(true);
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    @Order(3)
     void correctDeleteVideo() {
         String id = uuid;
 
@@ -88,5 +104,6 @@ public class ImageTest extends AbstractMongoTest {
                 })
                 .verifyComplete();
     }
+
 }
 

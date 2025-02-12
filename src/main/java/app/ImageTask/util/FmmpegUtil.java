@@ -22,25 +22,30 @@ import static com.google.common.io.Files.getFileExtension;
 @Component
 public class FmmpegUtil {
 
-    public String getFileFormat(String fileName) {
-        int lastIndex = fileName.lastIndexOf('.');
-        if (lastIndex == -1) {
-            return "Unknown"; // Если расширение отсутствует
-        }
-        return fileName.substring(lastIndex + 1).toLowerCase();
+    public Mono<String> getFileFormat(String fileName) {
+        return Mono.fromCallable(() -> {
+                    int lastIndex = fileName.lastIndexOf('.');
+                    if (lastIndex == -1) {
+                        return "Unknown"; // Если расширение отсутствует
+                    }
+                    return fileName.substring(lastIndex + 1).toLowerCase();
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
-    public String getNameWithoutExtension(String fileName) {
-        int lastDotIndex = fileName.lastIndexOf('.');
-        if (lastDotIndex > 0) {
-            return fileName.substring(0, lastDotIndex);
-        }
-        return fileName; // Если расширение отсутствует, возвращаем имя как есть
+    public Mono<String> getNameWithoutExtension(String fileName) {
+        return Mono.fromCallable(() -> {
+            int lastDotIndex = fileName.lastIndexOf('.');
+            if (lastDotIndex > 0) {
+                return fileName.substring(0, lastDotIndex);
+            }
+            return fileName; // Если расширение отсутствует, возвращаем имя как есть
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     public Mono<Void> convertVideoToGif(String filePath, FFmpegExecutor executor) {
         return Mono.fromCallable(() -> {
-                    Path tempOutputPath = Paths.get(filePath.replace(".mp4", "_temp.gif"));
+                    Path tempOutputPath = Paths.get(filePath.replace(".mp4", ".gif"));
                     FFmpegBuilder builder = new FFmpegBuilder()
                             .setInput(filePath)
                             .addOutput(tempOutputPath.toString())
@@ -55,10 +60,12 @@ public class FmmpegUtil {
                 .then();
     }
 
-    public boolean isMp4File(FilePart file) {
-        String contentType = file.headers().getContentType().toString();
-        String fileExtension = getFileExtension(file.filename());
-        return "video/mp4".equalsIgnoreCase(contentType) && "mp4".equalsIgnoreCase(fileExtension);
+    public Mono<Boolean> isMp4File(FilePart file) {
+        return Mono.fromCallable(() -> {
+            String contentType = file.headers().getContentType().toString();
+            String fileExtension = getFileExtension(file.filename());
+            return "video/mp4".equalsIgnoreCase(contentType) && "mp4".equalsIgnoreCase(fileExtension);
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     public Mono<Void> convertVideo(String filePath, int width, int height, FFmpegExecutor executor) {

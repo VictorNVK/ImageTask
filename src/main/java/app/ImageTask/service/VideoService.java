@@ -62,38 +62,37 @@ public class VideoService {
     }
 
     public Mono<ResponseEntity<Map<String, String>>> saveVideo(FilePart file) {
-        return Mono.just(file)
-                .flatMap(f -> {
-                    if (!ffmpegUtil.isMp4File(f)) {
-                        log.error("Uploaded file, is not a MP4 format", f.filename());
+        return Mono.zip(ffmpegUtil.isMp4File(file),
+                        ffmpegUtil.getNameWithoutExtension(file.filename()),
+                        ffmpegUtil.getFileFormat(file.filename()))
+                .flatMap(tuple -> {
+                    boolean isMp4 = tuple.getT1();
+                    String filename = tuple.getT2();
+                    String format = tuple.getT3();
+
+                    if (!isMp4) {
                         return Mono.error(new IllegalArgumentException("Uploaded file is not an MP4 file!!"));
                     }
-                    String filename = ffmpegUtil.getNameWithoutExtension(f.filename());
-                    String format = ffmpegUtil.getFileFormat(f.filename());
+
                     String id = UUID.randomUUID().toString();
                     Path filePath = Paths.get("videos", id + ".mp4");
-                    try {
-                        Files.createDirectories(filePath.getParent());
-                    } catch (Exception e) {
-                        log.error("Error creating directories: {}", e.getMessage());
-                        return Mono.error(new RuntimeException("Error creating directories: " + e.getMessage()));
-                    }
 
-                    return f.transferTo(filePath)
-                            .then(Mono.just(filePath))
-                            .flatMap(path -> {
-                                Video video = Video.builder()
-                                        .id(id)
-                                        .filename(filename)
-                                        .format(format)
-                                        .filePath(path.toString())
-                                        .processing(false)
-                                        .processingSuccess(null)
-                                        .build();
-
-                                return videoRepository.save(video);
-                            });
+                    return Mono.fromCallable(() -> {
+                                Files.createDirectories(filePath.getParent());
+                                return filePath;
+                            }).subscribeOn(Schedulers.boundedElastic())
+                            .flatMap(path -> file.transferTo(path)
+                                    .then(Mono.fromCallable(() -> Video.builder()
+                                            .id(id)
+                                            .filename(filename)
+                                            .format(format)
+                                            .filePath(path.toString())
+                                            .processing(false)
+                                            .processingSuccess(null)
+                                            .build()))
+                            );
                 })
+                .flatMap(videoRepository::save)
                 .map(video -> {
                     log.info("Video was saved, ID : {}", video.getId());
                     Map<String, String> responseMap = new HashMap<>();
@@ -147,7 +146,7 @@ public class VideoService {
                         try {
                             DataBuffer dataBuffer = dataBufferFactory.wrap(Files.readAllBytes(filePath));
                             return Mono.just(ResponseEntity.ok()
-                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + video.getFilename() + video.getFormat() + "\"")
+                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + video.getFilename() + "." + video.getFormat() + "\"")
                                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                                     .body(dataBuffer));
                         } catch (IOException e) {
@@ -177,6 +176,7 @@ public class VideoService {
                             .then(Mono.fromRunnable(() -> {
                                 video.setProcessing(false);
                                 video.setProcessingSuccess(true);
+                                video.setFilePath(Paths.get("videos", id + ".mp4").toString());
                                 videoRepository.save(video).subscribe();
                             }))
                             .thenReturn(ResponseEntity.ok(Map.of("success", true)))
@@ -199,33 +199,23 @@ public class VideoService {
                     video.setProcessingSuccess(null);
 
                     return videoRepository.save(video)
-                            .then(Mono.fromCallable(() -> {
-                                ffmpegUtil.convertVideoToGif(video.getFilePath(), executor);
-                                return video;
-                            }))
-                            .subscribeOn(Schedulers.boundedElastic())
-                            .flatMap(processedVideo -> {
-                                processedVideo.setProcessing(false);
-                                processedVideo.setProcessingSuccess(true);
-                                processedVideo.setFormat(".gif");
+                            .then(ffmpegUtil.convertVideoToGif(video.getFilePath(), executor))
+                            .then(Mono.fromRunnable(() -> {
+                                video.setProcessing(false);
+                                video.setProcessingSuccess(true);
+                                video.setFormat("gif");
+                                video.setFilePath(Paths.get("videos", id + ".gif").toString());
                                 log.info("Video converted successfully, ID: {}", id);
-                                return videoRepository.save(processedVideo);
-                            })
+                                videoRepository.save(video).subscribe();
+                            }))
+
                             .thenReturn(ResponseEntity.ok(Map.of("success", true)))
                             .onErrorResume(e -> {
                                 log.error("Conversion failed, ID: {}", id, e);
-                                return videoRepository.findById(id)
-                                        .flatMap(errorVideo -> {
-                                            errorVideo.setProcessing(false);
-                                            errorVideo.setProcessingSuccess(false);
-                                            return videoRepository.save(errorVideo);
-                                        })
-                                        .thenReturn(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                                                .body(Map.of("error", false)));
+                                return handleConversionError(id);
                             });
                 })
                 .onErrorResume(e -> {
-                    // Глобальная обработка ошибок
                     log.error("Global error in conversion: {}", e.getMessage());
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                             .body(Map.of("error", false)));
