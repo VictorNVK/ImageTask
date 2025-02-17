@@ -1,27 +1,21 @@
 package app.ImageTask.util;
 
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import net.bramp.ffmpeg.FFmpegExecutor;
 import net.bramp.ffmpeg.builder.FFmpegBuilder;
 import net.bramp.ffmpeg.job.FFmpegJob;
 import org.springframework.http.codec.multipart.FilePart;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
-
-import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -98,7 +92,6 @@ public class FmmpegUtil {
                     } catch (IOException e) {
                         throw new RuntimeException("Failed to move the converted video file", e);
                     }
-
                     return null;
                 })
                 .subscribeOn(Schedulers.boundedElastic())
@@ -135,15 +128,11 @@ public class FmmpegUtil {
         return Mono.fromRunnable(() -> {
             try {
                 Files.createDirectories(Paths.get(outputDir));
-
-                // Формируем команду FFmpeg для преобразования MP4 в HLS
                 FFmpegBuilder builder = new FFmpegBuilder()
                         .setInput(filePath)
                         .addOutput(outputDir + "/index.m3u8")
                         .addExtraArgs("-codec:v", "libx264", "-codec:a", "aac", "-start_number", "0", "-hls_time", "10", "-hls_list_size", "0", "-f", "hls")
                         .done();
-
-                // Выполняем команду FFmpeg
                 FFmpegJob job = executor.createJob(builder);
                 job.run();
             } catch (IOException e) {

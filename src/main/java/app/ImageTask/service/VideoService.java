@@ -6,7 +6,9 @@ import app.ImageTask.domain.dto.SizeDto;
 import app.ImageTask.domain.dto.VideoDto;
 import app.ImageTask.domain.entity.Video;
 import app.ImageTask.repository.VideoRepository;
+import app.ImageTask.util.ErrorHandler;
 import app.ImageTask.util.FmmpegUtil;
+import app.ImageTask.util.exception.ResourceNotFoundException;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -100,12 +102,6 @@ public class VideoService {
                     Map<String, String> responseMap = new HashMap<>();
                     responseMap.put("id", video.getId());
                     return ResponseEntity.ok(responseMap);
-                })
-                .onErrorResume(e -> {
-                    log.error("Error in saving video : {}", e.getMessage());
-                    Map<String, String> errorMap = new HashMap<>();
-                    errorMap.put("error", e.getMessage());
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
                 });
     }
 
@@ -125,6 +121,7 @@ public class VideoService {
 
     public Mono<ResponseEntity<Map<String, Boolean>>> deleteVideo(String id) {
         return videoRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
                 .flatMap(video -> {
                     try {
                         Files.deleteIfExists(Paths.get(video.getFilePath()));
@@ -132,15 +129,14 @@ public class VideoService {
                         return videoRepository.delete(video)
                                 .then(Mono.just(ResponseEntity.ok(Map.of("success", true))));
                     } catch (IOException e) {
-                        log.error("Error deleting video file with ID: {}", id, e);
-                        return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("success", false)));
+                        throw new RuntimeException("Error deleting file");
                     }
-                })
-                .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("success", false))));
+                });
     }
 
     public Mono<ResponseEntity<?>> downloadVideo(String id) {
         return videoRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
                 .flatMap(video -> {
                     Path filePath = Paths.get(video.getFilePath());
                     if (Files.exists(filePath)) {
@@ -152,23 +148,21 @@ public class VideoService {
                                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                                     .body(dataBuffer));
                         } catch (IOException e) {
-                            log.error("Error reading file: {}", e.getMessage());
-                            return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
+                            throw new RuntimeException("Error download file");
                         }
                     } else {
-                        return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+                        throw new ResourceNotFoundException("File not found");
                     }
-                })
-                .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build()));
+                });
     }
 
 
     public Mono<ResponseEntity<Map<String, Boolean>>> changeVideoSize(SizeDto sizeDto, String id) {
         return videoRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
                 .flatMap(video -> {
                     if (sizeDto.getWidth() % 2 != 0 || sizeDto.getHeight() % 2 != 0) {
-                        log.error("Invalid size for video, ID : {}", id);
-                        return Mono.error(new IllegalArgumentException("Width and height must be even numbers greater than 20"));
+                        throw new IllegalArgumentException("Width and height must be even numbers greater than 20");
                     }
                     video.setProcessing(true);
                     video.setProcessingSuccess(null);
@@ -181,21 +175,17 @@ public class VideoService {
                                 video.setFilePath(Paths.get("videos", id + ".mp4").toString());
                                 videoRepository.save(video).subscribe();
                             }))
-                            .thenReturn(ResponseEntity.ok(Map.of("success", true)))
-                            .onErrorResume(e -> {
-                                log.error("Conversion failed, ID: {}", id, e);
-                                return handleConversionError(id);
-                            });
+                            .thenReturn(ResponseEntity.ok(Map.of("success", true)));
                 })
                 .onErrorResume(e -> {
                     log.error("Global error in conversion: {}", e.getMessage());
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                            .body(Map.of("error", false)));
+                    return handleConversionError(id);
                 });
     }
 
     public Mono<ResponseEntity<Map<String, Boolean>>> toGif(String id) {
         return videoRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
                 .flatMap(video -> {
                     video.setProcessing(true);
                     video.setProcessingSuccess(null);
@@ -210,17 +200,11 @@ public class VideoService {
                                 log.info("Video converted successfully, ID: {}", id);
                                 videoRepository.save(video).subscribe();
                             }))
-
-                            .thenReturn(ResponseEntity.ok(Map.of("success", true)))
-                            .onErrorResume(e -> {
-                                log.error("Conversion failed, ID: {}", id, e);
-                                return handleConversionError(id);
-                            });
+                            .thenReturn(ResponseEntity.ok(Map.of("success", true)));
                 })
                 .onErrorResume(e -> {
-                    log.error("Global error in conversion: {}", e.getMessage());
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                            .body(Map.of("error", false)));
+                    log.error("Conversion failed, ID: {}", id, e);
+                    return handleConversionError(id);
                 });
     }
 
@@ -247,6 +231,7 @@ public class VideoService {
 
     public Mono<ResponseEntity<Map<String, Boolean>>> toHLS(String id) {
         return videoRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
                 .flatMap(video -> {
                     video.setProcessing(true);
                     video.setProcessingSuccess(null);
@@ -264,16 +249,13 @@ public class VideoService {
                                 log.error("Conversion to HLS failed, ID: {}", id, e);
                                 return handleConversionError(id);
                             });
-                })
-                .onErrorResume(e -> {
-                    log.error("Global error in conversion to HLS: {}", e.getMessage());
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                            .body(Map.of("error", false)));
                 });
     }
 
+
     public Mono<ResponseEntity<?>> getHlsPlaylist(String id) {
         return videoRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
                 .flatMap(video -> {
                     Path playlistPath = Paths.get(video.getFilePath());
                     if (Files.exists(playlistPath)) {
@@ -285,15 +267,14 @@ public class VideoService {
                                     .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + id + "_hls.zip\"")
                                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                                     .body(zipBytes));
-                        } catch (IOException e) {
-                            log.error("Error reading playlist file: {}", e.getMessage());
-                            return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
+                        } catch (Exception e) {
+                            throw new RuntimeException("Error reading playlist file", e);
                         }
                     } else {
-                        return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+                        throw new ResourceNotFoundException("Playlist not found");
                     }
-                })
-                .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build()));
+                });
+
     }
 
     private Mono<ResponseEntity<Map<String, Boolean>>> handleConversionError(String id) {
