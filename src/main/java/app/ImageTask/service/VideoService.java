@@ -1,6 +1,7 @@
 package app.ImageTask.service;
 
 import app.ImageTask.config.VariableConfig;
+import app.ImageTask.domain.dto.CutTimeDto;
 import app.ImageTask.domain.dto.SizeDto;
 import app.ImageTask.domain.dto.VideoDto;
 import app.ImageTask.domain.entity.Video;
@@ -30,6 +31,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -220,6 +222,78 @@ public class VideoService {
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                             .body(Map.of("error", false)));
                 });
+    }
+
+    public Mono<ResponseEntity<Map<String, Boolean>>> cutByTime(String id, CutTimeDto cutTimeDto) {
+        return videoRepository.findById(id)
+                .flatMap(video -> {
+                    return videoRepository.save(video)
+                            .then(ffmpegUtil.cutVideoByTime(video.getFilePath(), cutTimeDto.getStart(), cutTimeDto.getEnd(), executor))
+                            .then(Mono.defer(() -> {
+                                video.setProcessing(false);
+                                video.setProcessingSuccess(true);
+                                video.setFilePath(Paths.get("videos", id + ".mp4").toString());
+                                return videoRepository.save(video)
+                                        .thenReturn(ResponseEntity.ok(Map.of("success", true)));
+                            }));
+                })
+                .onErrorResume(e -> {
+                    log.error("Error processing request for ID: {}", id, e);
+                    Map<String, Boolean> errorMap = new HashMap<>();
+                    errorMap.put("error", Boolean.FALSE);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
+                });
+    }
+
+    public Mono<ResponseEntity<Map<String, Boolean>>> toHLS(String id) {
+        return videoRepository.findById(id)
+                .flatMap(video -> {
+                    video.setProcessing(true);
+                    video.setProcessingSuccess(null);
+
+                    return videoRepository.save(video)
+                            .then(ffmpegUtil.convertVideoToHLS(video.getFilePath(), "videos/" + id + "_hls", executor))
+                            .then(Mono.defer(() -> {
+                                video.setProcessing(false);
+                                video.setProcessingSuccess(true);
+                                video.setFilePath("videos/" + id + "_hls/index.m3u8");
+                                return videoRepository.save(video)
+                                        .thenReturn(ResponseEntity.ok(Map.of("success", true)));
+                            }))
+                            .onErrorResume(e -> {
+                                log.error("Conversion to HLS failed, ID: {}", id, e);
+                                return handleConversionError(id);
+                            });
+                })
+                .onErrorResume(e -> {
+                    log.error("Global error in conversion to HLS: {}", e.getMessage());
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(Map.of("error", false)));
+                });
+    }
+
+    public Mono<ResponseEntity<?>> getHlsPlaylist(String id) {
+        return videoRepository.findById(id)
+                .flatMap(video -> {
+                    Path playlistPath = Paths.get(video.getFilePath());
+                    if (Files.exists(playlistPath)) {
+                        try {
+                            String playlistContent = new String(Files.readAllBytes(playlistPath));
+                            List<String> tsFiles = ffmpegUtil.extractTsFilesFromPlaylist(playlistContent);
+                            byte[] zipBytes = ffmpegUtil.createZipArchive(playlistPath.getParent(), tsFiles);
+                            return Mono.just(ResponseEntity.ok()
+                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + id + "_hls.zip\"")
+                                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                                    .body(zipBytes));
+                        } catch (IOException e) {
+                            log.error("Error reading playlist file: {}", e.getMessage());
+                            return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
+                        }
+                    } else {
+                        return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+                    }
+                })
+                .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build()));
     }
 
     private Mono<ResponseEntity<Map<String, Boolean>>> handleConversionError(String id) {

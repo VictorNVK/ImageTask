@@ -6,8 +6,6 @@ import app.ImageTask.util.MockFilePart;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.core.io.buffer.DataBufferFactory;
-import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
+import java.util.Objects;
 
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
@@ -91,6 +90,43 @@ public class ImageTest extends AbstractMongoTest {
 
     @Test
     @Order(3)
+    void correctToHls(){
+        String id = uuid;
+        Mono<ResponseEntity<Map<String, Boolean>>> responseMono = videoService.toHLS(id);
+        StepVerifier.create(responseMono)
+                .assertNext(response -> {
+                    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+                    assertThat(response.getBody().containsKey("success"));
+                    assertThat(response.getBody().get("success")).isEqualTo(true);
+                }).verifyComplete();
+    }
+
+
+
+    @Test
+    @Order(4)
+    void correctDownloadVideo(){
+        String id = uuid;
+        Mono<ResponseEntity<?>> responseMono = videoService.downloadVideo(id);
+        StepVerifier.create(responseMono)
+                .assertNext(response -> {
+                    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+                }).verifyComplete();
+    }
+
+    @Test
+    @Order(5)
+    void correctHlsDownload(){
+        String id = uuid;
+        Mono<ResponseEntity<?>> responseMono = videoService.getHlsPlaylist(id);
+        StepVerifier.create(responseMono)
+                .assertNext(response -> {
+                    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+                }).verifyComplete();
+    }
+
+    @Test
+    @Order(6)
     void correctDeleteVideo() {
         String id = uuid;
 
@@ -99,7 +135,7 @@ public class ImageTest extends AbstractMongoTest {
         StepVerifier.create(responseMono)
                 .assertNext(response -> {
                     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-                    assertThat(response.getBody().containsKey("success"));
+                    assertThat(Objects.requireNonNull(response.getBody()).containsKey("success"));
                     assertThat(response.getBody().get("success")).isEqualTo(true);
                 })
                 .verifyComplete();
