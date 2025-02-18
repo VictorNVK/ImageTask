@@ -6,7 +6,6 @@ import app.ImageTask.domain.dto.SizeDto;
 import app.ImageTask.domain.dto.VideoDto;
 import app.ImageTask.domain.entity.Video;
 import app.ImageTask.repository.VideoRepository;
-import app.ImageTask.util.ErrorHandler;
 import app.ImageTask.util.FmmpegUtil;
 import app.ImageTask.util.exception.ResourceNotFoundException;
 import jakarta.annotation.PostConstruct;
@@ -46,7 +45,6 @@ public class VideoService {
     private final VariableConfig variableConfig;
     private final FmmpegUtil ffmpegUtil;
     private FFmpegExecutor executor;
-
 
     @SneakyThrows
     @PostConstruct
@@ -112,6 +110,7 @@ public class VideoService {
                         VideoDto.builder()
                                 .id(video.getId())
                                 .filename(video.getFilename())
+                                .format(video.getFormat())
                                 .processing(video.getProcessing())
                                 .processingSuccess(video.getProcessingSuccess())
                                 .build())
@@ -122,40 +121,44 @@ public class VideoService {
     public Mono<ResponseEntity<Map<String, Boolean>>> deleteVideo(String id) {
         return videoRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
-                .flatMap(video -> {
-                    try {
-                        Files.deleteIfExists(Paths.get(video.getFilePath()));
-                        log.info("Video file deleted successfully with ID: {}", id);
-                        return videoRepository.delete(video)
-                                .then(Mono.just(ResponseEntity.ok(Map.of("success", true))));
-                    } catch (IOException e) {
-                        throw new RuntimeException("Error deleting file");
-                    }
-                });
+                .flatMap(video -> Mono.fromCallable(() -> {
+                            try {
+                                Files.deleteIfExists(Paths.get(video.getFilePath()));
+                                log.info("Video file deleted successfully with ID: {}", id);
+                                return video;
+                            } catch (IOException e) {
+                                throw new RuntimeException("Error deleting file", e);
+                            }
+                        }).subscribeOn(Schedulers.boundedElastic())
+                        .flatMap(videoRepository::delete)
+                        .then(Mono.just(ResponseEntity.ok(Map.of("success", true)))));
     }
 
     public Mono<ResponseEntity<?>> downloadVideo(String id) {
         return videoRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
-                .flatMap(video -> {
-                    Path filePath = Paths.get(video.getFilePath());
-                    if (Files.exists(filePath)) {
-                        DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
-                        try {
-                            DataBuffer dataBuffer = dataBufferFactory.wrap(Files.readAllBytes(filePath));
-                            return Mono.just(ResponseEntity.ok()
-                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + video.getFilename() + "." + video.getFormat() + "\"")
-                                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                                    .body(dataBuffer));
-                        } catch (IOException e) {
-                            throw new RuntimeException("Error download file");
-                        }
-                    } else {
-                        throw new ResourceNotFoundException("File not found");
-                    }
-                });
+                .flatMap(video -> Mono.fromCallable(() -> {
+                            Path filePath = Paths.get(video.getFilePath());
+                            if (Files.exists(filePath)) {
+                                return filePath;
+                            } else {
+                                throw new ResourceNotFoundException("File not found");
+                            }
+                        }).subscribeOn(Schedulers.boundedElastic())
+                        .flatMap(filePath -> {
+                            DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
+                            try {
+                                byte[] fileBytes = Files.readAllBytes(filePath);
+                                DataBuffer dataBuffer = dataBufferFactory.wrap(fileBytes);
+                                return Mono.just(ResponseEntity.ok()
+                                        .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + video.getFilename() + "." + video.getFormat() + "\"")
+                                        .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                                        .body(dataBuffer));
+                            } catch (IOException e) {
+                                throw new RuntimeException("Error downloading file", e);
+                            }
+                        }));
     }
-
 
     public Mono<ResponseEntity<Map<String, Boolean>>> changeVideoSize(SizeDto sizeDto, String id) {
         return videoRepository.findById(id)
@@ -169,13 +172,12 @@ public class VideoService {
 
                     return videoRepository.save(video)
                             .then(ffmpegUtil.convertVideo(video.getFilePath(), sizeDto.getWidth(), sizeDto.getHeight(), executor))
-                            .then(Mono.fromRunnable(() -> {
+                            .then(Mono.defer(() -> {
                                 video.setProcessing(false);
                                 video.setProcessingSuccess(true);
                                 video.setFilePath(Paths.get("videos", id + ".mp4").toString());
-                                videoRepository.save(video).subscribe();
-                            }))
-                            .thenReturn(ResponseEntity.ok(Map.of("success", true)));
+                                return videoRepository.save(video).thenReturn(ResponseEntity.ok(Map.of("success", true)));
+                            }));
                 })
                 .onErrorResume(e -> {
                     log.error("Global error in conversion: {}", e.getMessage());
@@ -192,19 +194,38 @@ public class VideoService {
 
                     return videoRepository.save(video)
                             .then(ffmpegUtil.convertVideoToGif(video.getFilePath(), executor))
-                            .then(Mono.fromRunnable(() -> {
+                            .then(Mono.defer(() -> {
                                 video.setProcessing(false);
                                 video.setProcessingSuccess(true);
                                 video.setFormat("gif");
                                 video.setFilePath(Paths.get("videos", id + ".gif").toString());
                                 log.info("Video converted successfully, ID: {}", id);
-                                videoRepository.save(video).subscribe();
-                            }))
-                            .thenReturn(ResponseEntity.ok(Map.of("success", true)));
+                                return videoRepository.save(video)
+                                        .thenReturn(ResponseEntity.ok(Map.of("success", true)));
+                            }));
                 })
                 .onErrorResume(e -> {
                     log.error("Conversion failed, ID: {}", id, e);
                     return handleConversionError(id);
+                });
+    }
+
+    public Mono<ResponseEntity<Map<String, Boolean>>> transcodeVideo(String id, String outputCodec) {
+        return videoRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
+                .flatMap(video -> ffmpegUtil.transcodeVideoWithCodec(video.getFilePath(), outputCodec)
+                        .then(Mono.fromRunnable(() -> {
+                            video.setFilePath(Paths.get("videos", id + ".mp4").toString());
+                            video.setProcessing(false);
+                            video.setProcessingSuccess(true);
+                        }))
+                        .then(videoRepository.save(video))
+                        .thenReturn(ResponseEntity.ok(Map.of("success", true))))
+                .onErrorResume(e -> {
+                    log.error("Error processing request for ID: {}", id, e);
+                    Map<String, Boolean> errorMap = new HashMap<>();
+                    errorMap.put("error", Boolean.FALSE);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
                 });
     }
 
@@ -216,6 +237,7 @@ public class VideoService {
                             .then(Mono.defer(() -> {
                                 video.setProcessing(false);
                                 video.setProcessingSuccess(true);
+
                                 video.setFilePath(Paths.get("videos", id + ".mp4").toString());
                                 return videoRepository.save(video)
                                         .thenReturn(ResponseEntity.ok(Map.of("success", true)));
@@ -228,6 +250,7 @@ public class VideoService {
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorMap));
                 });
     }
+
 
     public Mono<ResponseEntity<Map<String, Boolean>>> toHLS(String id) {
         return videoRepository.findById(id)

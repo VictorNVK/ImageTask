@@ -1,9 +1,10 @@
 package app.ImageTask.controller;
 
-import app.ImageTask.domain.dto.CutTimeDto;
+import  app.ImageTask.domain.dto.CutTimeDto;
 import app.ImageTask.domain.dto.SizeDto;
 import app.ImageTask.domain.dto.VideoDto;
 import app.ImageTask.service.VideoService;
+import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -65,5 +66,11 @@ public class VideoController {
     @GetMapping("/getHLS/{id}")
     public Mono<ResponseEntity<?>> getHlsPlayList(@PathVariable String id){
         return videoService.getHlsPlaylist(id);
+    }
+
+    @Operation(summary = "Изменение кодека видео, доступные варианты - libx264 libx265 libvpx-vp9 libxvid")
+    @PatchMapping("/change_codec/{id}/{codec}")
+    public Mono<ResponseEntity<Map<String, Boolean>>> changeCodec(@PathVariable String id, @PathVariable String codec){
+        return videoService.transcodeVideo(id, codec);
     }
 }

@@ -74,7 +74,7 @@ public class ImageTest extends AbstractMongoTest {
 
     @Test
     @Order(2)
-    void correctConvertToGif(){
+    void correctConvertToGif() {
         String id = uuid;
 
         Mono<ResponseEntity<Map<String, Boolean>>> responseMono = videoService.toGif(id);
@@ -90,7 +90,7 @@ public class ImageTest extends AbstractMongoTest {
 
     @Test
     @Order(3)
-    void correctToHls(){
+    void correctToHls() {
         String id = uuid;
         Mono<ResponseEntity<Map<String, Boolean>>> responseMono = videoService.toHLS(id);
         StepVerifier.create(responseMono)
@@ -102,10 +102,9 @@ public class ImageTest extends AbstractMongoTest {
     }
 
 
-
     @Test
     @Order(4)
-    void correctDownloadVideo(){
+    void correctDownloadVideo() {
         String id = uuid;
         Mono<ResponseEntity<?>> responseMono = videoService.downloadVideo(id);
         StepVerifier.create(responseMono)
@@ -116,7 +115,7 @@ public class ImageTest extends AbstractMongoTest {
 
     @Test
     @Order(5)
-    void correctHlsDownload(){
+    void correctHlsDownload() {
         String id = uuid;
         Mono<ResponseEntity<?>> responseMono = videoService.getHlsPlaylist(id);
         StepVerifier.create(responseMono)

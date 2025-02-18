@@ -141,6 +141,45 @@ public class FmmpegUtil {
         }).subscribeOn(Schedulers.boundedElastic()).then();
     }
 
+    public Mono<Void> transcodeVideoWithCodec(String inputFilePath, String outputCodec) {
+        return Mono.fromCallable(() -> {
+
+            Path outputFilePath = Paths.get(inputFilePath.replace(".mp4", "_transcoded.mp4"));
+
+            if (!Files.exists(Paths.get(inputFilePath))) {
+                throw new RuntimeException("Input file not found: " + Paths.get(inputFilePath));
+            }
+
+            ProcessBuilder processBuilder = new ProcessBuilder(
+                    "ffmpeg",
+                    "-i", inputFilePath,
+                    "-c:v", outputCodec,
+                    outputFilePath.toString()
+            );
+            processBuilder.redirectErrorStream(true);
+
+            try {
+                Process process = processBuilder.start();
+                boolean completed = process.waitFor(30, TimeUnit.MINUTES);
+                if (completed) {
+                    int exitCode = process.exitValue();
+                    if (exitCode == 0) {
+                        log.info("Video transcoded successfully to codec: {}", outputCodec);
+                        Files.move(outputFilePath, Paths.get(inputFilePath), StandardCopyOption.REPLACE_EXISTING);
+                    } else {
+                        throw new RuntimeException("FFmpeg process exited with error code: " + exitCode);
+                    }
+                } else {
+                    process.destroyForcibly();
+                    throw new RuntimeException("FFmpeg process timed out");
+                }
+            } catch (IOException | InterruptedException e) {
+                throw new RuntimeException("Error running FFmpeg process", e);
+            }
+            return null;
+        }).subscribeOn(Schedulers.boundedElastic()).then();
+    }
+
     private long parseTimeToMillis(String time) {
         String[] parts = time.split(":");
         long millis = 0;
@@ -185,3 +224,4 @@ public class FmmpegUtil {
         return baos.toByteArray();
     }
 }
+
