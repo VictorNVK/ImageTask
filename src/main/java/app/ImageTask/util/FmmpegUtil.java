@@ -2,12 +2,16 @@ package app.ImageTask.util;
 
 import lombok.extern.slf4j.Slf4j;
 import net.bramp.ffmpeg.FFmpegExecutor;
+import net.bramp.ffmpeg.FFprobe;
 import net.bramp.ffmpeg.builder.FFmpegBuilder;
 import net.bramp.ffmpeg.job.FFmpegJob;
+import net.bramp.ffmpeg.probe.FFmpegProbeResult;
+import net.bramp.ffmpeg.probe.FFmpegStream;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -19,6 +23,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -141,6 +146,7 @@ public class FmmpegUtil {
         }).subscribeOn(Schedulers.boundedElastic()).then();
     }
 
+
     public Mono<Void> transcodeVideoWithCodec(String inputFilePath, String outputCodec) {
         return Mono.fromCallable(() -> {
 
@@ -179,6 +185,45 @@ public class FmmpegUtil {
             return null;
         }).subscribeOn(Schedulers.boundedElastic()).then();
     }
+
+    public Mono<Void> convertVideoToHLSWithMultiBitrate(String filePath, String outputDir, FFmpegExecutor executor) {
+        return Mono.fromRunnable(() -> {
+            try {
+                String[] bitrates = {"800k", "1200k", "2400k", "4800k", "7200k"};
+                String[] resolutions = {"640:360", "842:480", "1280:720", "1920:1080", "2560:1440"};
+
+
+                for (int i = 0; i < bitrates.length; i++) {
+                    Files.createDirectories(Paths.get(outputDir, "stream_" + i));
+
+                    FFmpegBuilder builder = new FFmpegBuilder()
+                            .setInput(filePath)
+                            .addOutput(outputDir + "/stream_" + i + "/index.m3u8")
+                            .addExtraArgs("-codec:v", "libx264", "-codec:a", "aac", "-b:v", bitrates[i], "-vf", "scale=" + resolutions[i],
+                                    "-start_number", "0", "-hls_time", "10", "-hls_list_size", "0", "-f", "hls")
+                            .done();
+
+                    FFmpegJob job = executor.createJob(builder);
+                    job.run();
+                }
+
+                FFmpegBuilder masterBuilder = new FFmpegBuilder()
+                        .setInput(filePath)
+                        .addOutput(outputDir + "/master.m3u8")
+                        .addExtraArgs("-codec", "copy", "-start_number", "0", "-hls_time", "10", "-hls_list_size", "0", "-f", "hls",
+                                "-master_pl_name", "master.m3u8",
+                                "-var_stream_map", "v:0,a:0")
+                        .done();
+
+                FFmpegJob masterJob = executor.createJob(masterBuilder);
+                masterJob.run();
+
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to create directories for HLS output", e);
+            }
+        }).subscribeOn(Schedulers.boundedElastic()).then();
+    }
+
 
     private long parseTimeToMillis(String time) {
         String[] parts = time.split(":");

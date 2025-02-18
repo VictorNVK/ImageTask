@@ -117,7 +117,7 @@ public class ImageTest extends AbstractMongoTest {
     @Order(5)
     void correctHlsDownload() {
         String id = uuid;
-        Mono<ResponseEntity<?>> responseMono = videoService.getHlsPlaylist(id);
+        Mono<ResponseEntity<?>> responseMono = videoService.getHlsPlaylist(id, "800k");
         StepVerifier.create(responseMono)
                 .assertNext(response -> {
                     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);

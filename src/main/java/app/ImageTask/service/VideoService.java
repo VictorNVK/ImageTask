@@ -45,6 +45,8 @@ public class VideoService {
     private final VariableConfig variableConfig;
     private final FmmpegUtil ffmpegUtil;
     private FFmpegExecutor executor;
+    private FFmpeg fFmpeg;
+    private FFprobe fFprobe;
 
     @SneakyThrows
     @PostConstruct
@@ -52,13 +54,15 @@ public class VideoService {
         String ffmpegPath = variableConfig.FFMPEG_PATH;
         String ffprobePath = variableConfig.FFPROBE_PATH;
 
+
+
         if (ffmpegPath == null || ffprobePath == null) {
             throw new IllegalStateException("FFMPEG_PATH and FFPROBE_PATH environment variables must be set");
         }
+        fFmpeg = new FFmpeg(ffmpegPath);
+        fFprobe = new FFprobe(ffprobePath);
 
-        FFmpeg ffmpeg = new FFmpeg(ffmpegPath);
-        FFprobe ffprobe = new FFprobe(ffprobePath);
-        executor = new FFmpegExecutor(ffmpeg, ffprobe);
+        executor = new FFmpegExecutor(fFmpeg, fFprobe);
 
         log.info("ffmpeg was initialized");
     }
@@ -213,14 +217,18 @@ public class VideoService {
     public Mono<ResponseEntity<Map<String, Boolean>>> transcodeVideo(String id, String outputCodec) {
         return videoRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
-                .flatMap(video -> ffmpegUtil.transcodeVideoWithCodec(video.getFilePath(), outputCodec)
-                        .then(Mono.fromRunnable(() -> {
-                            video.setFilePath(Paths.get("videos", id + ".mp4").toString());
-                            video.setProcessing(false);
-                            video.setProcessingSuccess(true);
-                        }))
-                        .then(videoRepository.save(video))
-                        .thenReturn(ResponseEntity.ok(Map.of("success", true))))
+                .flatMap(video -> {
+                    video.setProcessing(true);
+                    video.setProcessingSuccess(null);
+                    return ffmpegUtil.transcodeVideoWithCodec(video.getFilePath(), outputCodec)
+                            .then(Mono.fromRunnable(() -> {
+                                video.setFilePath(Paths.get("videos", id + ".mp4").toString());
+                                video.setProcessing(false);
+                                video.setProcessingSuccess(true);
+                            }))
+                            .then(videoRepository.save(video))
+                            .thenReturn(ResponseEntity.ok(Map.of("success", true)));
+                })
                 .onErrorResume(e -> {
                     log.error("Error processing request for ID: {}", id, e);
                     Map<String, Boolean> errorMap = new HashMap<>();
@@ -232,6 +240,8 @@ public class VideoService {
     public Mono<ResponseEntity<Map<String, Boolean>>> cutByTime(String id, CutTimeDto cutTimeDto) {
         return videoRepository.findById(id)
                 .flatMap(video -> {
+                    video.setProcessing(true);
+                    video.setProcessingSuccess(null);
                     return videoRepository.save(video)
                             .then(ffmpegUtil.cutVideoByTime(video.getFilePath(), cutTimeDto.getStart(), cutTimeDto.getEnd(), executor))
                             .then(Mono.defer(() -> {
@@ -260,11 +270,11 @@ public class VideoService {
                     video.setProcessingSuccess(null);
 
                     return videoRepository.save(video)
-                            .then(ffmpegUtil.convertVideoToHLS(video.getFilePath(), "videos/" + id + "_hls", executor))
+                            .then(ffmpegUtil.convertVideoToHLSWithMultiBitrate(video.getFilePath(), "videos/" + id + "_hls", executor))
                             .then(Mono.defer(() -> {
                                 video.setProcessing(false);
                                 video.setProcessingSuccess(true);
-                                video.setFilePath("videos/" + id + "_hls/index.m3u8");
+                                video.setFilePath("videos/" + id + "_hls");
                                 return videoRepository.save(video)
                                         .thenReturn(ResponseEntity.ok(Map.of("success", true)));
                             }))
@@ -276,29 +286,44 @@ public class VideoService {
     }
 
 
-    public Mono<ResponseEntity<?>> getHlsPlaylist(String id) {
+    public Mono<ResponseEntity<?>> getHlsPlaylist(String id, String bitrate) {
         return videoRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))
                 .flatMap(video -> {
-                    Path playlistPath = Paths.get(video.getFilePath());
+                    Map<String, String> bitrateToStreamDir = Map.of(
+                            "800k", "stream_0",
+                            "1200k", "stream_1",
+                            "2400k", "stream_2",
+                            "4800k", "stream_3",
+                            "7200k", "stream_4"
+                    );
+
+                    // Get the stream directory for the given bitrate
+                    String streamDir = bitrateToStreamDir.get(bitrate);
+                    if (streamDir == null) {
+                        throw new IllegalArgumentException("Invalid bitrate: " + bitrate);
+                    }
+
+                    // Construct the path to the playlist file
+                    Path playlistPath = Paths.get(video.getFilePath(), streamDir, "index.m3u8");
                     if (Files.exists(playlistPath)) {
                         try {
                             String playlistContent = new String(Files.readAllBytes(playlistPath));
                             List<String> tsFiles = ffmpegUtil.extractTsFilesFromPlaylist(playlistContent);
                             byte[] zipBytes = ffmpegUtil.createZipArchive(playlistPath.getParent(), tsFiles);
                             return Mono.just(ResponseEntity.ok()
-                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + id + "_hls.zip\"")
+                                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + id + "_hls_" + bitrate + ".zip\"")
                                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                                     .body(zipBytes));
                         } catch (Exception e) {
                             throw new RuntimeException("Error reading playlist file", e);
                         }
                     } else {
-                        throw new ResourceNotFoundException("Playlist not found");
+                        throw new ResourceNotFoundException("Playlist not found for bitrate: " + bitrate);
                     }
                 });
-
     }
+
 
     private Mono<ResponseEntity<Map<String, Boolean>>> handleConversionError(String id) {
         return videoRepository.findById(id)

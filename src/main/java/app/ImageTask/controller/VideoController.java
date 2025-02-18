@@ -63,9 +63,10 @@ public class VideoController {
         return videoService.toHLS(id);
     }
 
-    @GetMapping("/getHLS/{id}")
-    public Mono<ResponseEntity<?>> getHlsPlayList(@PathVariable String id){
-        return videoService.getHlsPlaylist(id);
+    @Operation(summary = "Доступные варианты битрейта - 800k 1200k 2400k 4800k 7200k")
+    @GetMapping("/getHLS/{id}/{bitrate}")
+    public Mono<ResponseEntity<?>> getHlsPlayList(@PathVariable String id, @PathVariable String bitrate){
+        return videoService.getHlsPlaylist(id, bitrate);
     }
 
     @Operation(summary = "Изменение кодека видео, доступные варианты - libx264 libx265 libvpx-vp9 libxvid")
