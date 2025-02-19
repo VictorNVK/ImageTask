@@ -55,7 +55,6 @@ public class VideoService {
         String ffprobePath = variableConfig.FFPROBE_PATH;
 
 
-
         if (ffmpegPath == null || ffprobePath == null) {
             throw new IllegalStateException("FFMPEG_PATH and FFPROBE_PATH environment variables must be set");
         }
@@ -163,7 +162,7 @@ public class VideoService {
                             }
                         }));
     }
-
+    /*Method for change size vido*/
     public Mono<ResponseEntity<Map<String, Boolean>>> changeVideoSize(SizeDto sizeDto, String id) {
         return videoRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Video not found")))

@@ -2,11 +2,8 @@ package app.ImageTask.util;
 
 import lombok.extern.slf4j.Slf4j;
 import net.bramp.ffmpeg.FFmpegExecutor;
-import net.bramp.ffmpeg.FFprobe;
 import net.bramp.ffmpeg.builder.FFmpegBuilder;
 import net.bramp.ffmpeg.job.FFmpegJob;
-import net.bramp.ffmpeg.probe.FFmpegProbeResult;
-import net.bramp.ffmpeg.probe.FFmpegStream;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
